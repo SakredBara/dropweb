@@ -629,28 +629,11 @@ ColorScheme genColorScheme(
   Color? color,
   bool ignoreConfig = false,
 }) {
-  final vm2 = ref.watch(
-    themeSettingProvider.select(
-      (state) => VM2(
-        a: state.primaryColor,
-        b: state.schemeVariant,
-      ),
-    ),
-  );
-  if (color == null && (ignoreConfig == true || vm2.a == null)) {
-    return ColorScheme.fromSeed(
-      seedColor: globalState.corePalette
-              ?.toColorScheme(brightness: brightness)
-              .primary ??
-          globalState.accentColor,
-      brightness: brightness,
-      dynamicSchemeVariant: vm2.b,
-    );
-  }
+  final _ = (ref, color, ignoreConfig);
   return ColorScheme.fromSeed(
-    seedColor: color ?? Color(vm2.a!),
+    seedColor: const Color(defaultPrimaryColor),
     brightness: brightness,
-    dynamicSchemeVariant: vm2.b,
+    dynamicSchemeVariant: DynamicSchemeVariant.tonalSpot,
   );
 }
 
