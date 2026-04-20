@@ -39,11 +39,11 @@ class AddProfileView extends StatelessWidget {
   }
 
   Future<void> _toAdd() async {
-    final url = await globalState.showCommonDialog<String>(
+    final urls = await globalState.showCommonDialog<List<String>>(
       child: const URLFormDialog(),
     );
-    if (url != null) {
-      _handleAddProfileFormURL(url);
+    if (urls != null && urls.isNotEmpty) {
+      await globalState.appController.addProfilesFromUrls(urls);
     }
   }
 
@@ -110,9 +110,13 @@ class _URLFormDialogState extends State<URLFormDialog> {
   final urlController = TextEditingController();
 
   void _handleSubmit() {
-    final url = urlController.text.trim();
-    if (url.isNotEmpty) {
-      Navigator.of(context).pop<String>(url);
+    final urls = urlController.text
+        .split(RegExp(r'[\n,;]+'))
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
+    if (urls.isNotEmpty) {
+      Navigator.of(context).pop<List<String>>(urls);
     }
   }
 
@@ -143,12 +147,13 @@ class _URLFormDialogState extends State<URLFormDialog> {
             controller: urlController,
             keyboardType: TextInputType.url,
             autofocus: true,
-            minLines: 1,
+            minLines: 3,
             maxLines: 5,
             onSubmitted: (_) => _handleSubmit(),
             decoration: InputDecoration(
               border: const OutlineInputBorder(),
               labelText: appLocalizations.url,
+              hintText: 'https://example.com/sub-1\\nhttps://example.com/sub-2',
             ),
           ),
         ),
