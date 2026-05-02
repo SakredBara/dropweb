@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
+import 'dart:math';
 
 import 'package:dropweb/models/models.dart';
 import 'package:dropweb/state.dart';
@@ -144,6 +145,25 @@ class ParazitXManager {
       StreamController<String>.broadcast();
 
   static bool _tunnelReady = false;
+
+  /// Per-session SOCKS5 RFC1929 credentials for the relay's local
+  /// listener. Generated once with [Random.secure] when the manager
+  /// first starts the relay this session and reused for rotation /
+  /// reconnect so the relay process keeps the same auth pair across
+  /// AUTH re-sends. Cleared on [deactivate] / tunnel failure.
+  ///
+  /// These values are forwarded to:
+  ///   * the native side via `ParazitXVpnPlugin.start(socksUser:,
+  ///     socksPass:)` so `ParazitXRelayController` uses them on the
+  ///     `--socks-user/--socks-pass` CLI flags instead of generating
+  ///     its own randoms;
+  ///   * [ParazitXBridgeInfo.username] / [ParazitXBridgeInfo.password]
+  ///     so `ParazitXMihomoOrchestrator` can wire them into Mihomo's
+  ///     bridge proxy and the SOCKS5 handshake succeeds.
+  ///
+  /// MUST NEVER be logged.
+  static String? _socksUser;
+  static String? _socksPass;
 
   static bool get isTunnelReady => _tunnelReady;
   static Stream<bool> get tunnelReadyStream => _tunnelReadyCtrl.stream;
@@ -1005,6 +1025,29 @@ class ParazitXManager {
   /// Set to 60 seconds to allow for slow networks + server delays.
   static const _activationTimeout = Duration(seconds: 60);
 
+  /// Lazily generate the per-session SOCKS5 credentials. Uses
+  /// [Random.secure] (cryptographic PRNG). User: 16 chars hex (~64-bit
+  /// entropy). Password: 32 chars hex (~128-bit entropy). Hex keeps
+  /// the wire format pure ASCII for both Mihomo's YAML and the relay's
+  /// CLI argv. Idempotent: a second call returns the existing pair.
+  static (String, String) _ensureSocksCredentials() {
+    final user = _socksUser;
+    final pass = _socksPass;
+    if (user != null && pass != null) return (user, pass);
+    final rng = Random.secure();
+    String hex(int byteLen) {
+      final bytes = List<int>.generate(byteLen, (_) => rng.nextInt(256));
+      return bytes
+          .map((b) => b.toRadixString(16).padLeft(2, '0'))
+          .join();
+    }
+    final newUser = hex(8);    // 16 hex chars
+    final newPass = hex(16);   // 32 hex chars
+    _socksUser = newUser;
+    _socksPass = newPass;
+    return (newUser, newPass);
+  }
+
   /// Map a native mode constant to the canonical log label used by
   /// the `[ParazitX][mode] <label>` line. Kept centralized so
   /// activation, rotation and any future reconnect path emit the
@@ -1128,6 +1171,7 @@ class ParazitXManager {
     // with initial activation. Logged once per start so it's clear from
     // logs which native lifecycle is in play.
     final mode = ParazitXVpnPlugin.defaultMode;
+    final (sUser, sPass) = _ensureSocksCredentials();
     final pluginStopwatch = Stopwatch()..start();
     developer.log(
       '[ParazitX][mode] ${_modeLogLabel(mode)}',
@@ -1146,6 +1190,8 @@ class ParazitXManager {
         socksPort: _socksPort,
         mtu: _tunMtu,
         mode: mode,
+        socksUser: sUser,
+        socksPass: sPass,
       );
     } on PlatformException catch (e) {
       final ms = pluginStopwatch.elapsedMilliseconds;
@@ -1194,19 +1240,25 @@ class ParazitXManager {
           _tunnelReadyCtrl.add(true);
           // Tunnel just transitioned to ready: the relay's local SOCKS5
           // listener is bound and a join_link is active, so the bridge
-          // is now consumable by Mihomo. Publish endpoint metadata.
+          // is now consumable by Mihomo. Publish endpoint metadata +
+          // the per-session SOCKS5 credentials (the relay's listener
+          // requires RFC1929 auth, so Mihomo's bridge proxy must dial
+          // with them or the handshake fails).
+          final (bUser, bPass) = _ensureSocksCredentials();
           final info = ParazitXBridgeInfo(
             host: '127.0.0.1',
             port: _socksPort,
+            username: bUser,
+            password: bPass,
           );
           _bridgeInfo = info;
           _bridgeInfoCtrl.add(info);
           developer.log(
-            '[ParazitX][mihomo] bridge ready host=${info.host} port=${info.port}',
+            '[ParazitX][mihomo] bridge ready host=${info.host} port=${info.port} hasAuth=${info.username.isNotEmpty}',
             name: 'ParazitX',
           );
           LogBuffer.instance.add(
-            '[ParazitX][mihomo] bridge ready host=${info.host} port=${info.port}',
+            '[ParazitX][mihomo] bridge ready host=${info.host} port=${info.port} hasAuth=${info.username.isNotEmpty}',
           );
           _triggerMihomoConfigReload(reason: 'bridge ready');
         }
@@ -1239,6 +1291,8 @@ class ParazitXManager {
         if (_bridgeInfo != null) {
           _bridgeInfo = null;
           _bridgeInfoCtrl.add(null);
+          _socksUser = null;
+          _socksPass = null;
           developer.log(
             '[ParazitX][mihomo] bridge cleared (tunnel failure)',
             name: 'ParazitX',
@@ -1562,6 +1616,8 @@ class ParazitXManager {
     _servers = [];
     _relays = const <_RelayCandidate>[];
     _serverIndex = 0;
+    _socksUser = null;
+    _socksPass = null;
     if (_tunnelReady) {
       _tunnelReady = false;
       _tunnelReadyCtrl.add(false);
@@ -1669,12 +1725,15 @@ class ParazitXManager {
     developer.log('rotateCall: got new joinLink', name: 'ParazitX');
 
     final mode = ParazitXVpnPlugin.defaultMode;
+    final (sUser, sPass) = _ensureSocksCredentials();
     try {
       await ParazitXVpnPlugin.start(
         joinLink: newJoinLink,
         socksPort: _socksPort,
         mtu: _tunMtu,
         mode: mode,
+        socksUser: sUser,
+        socksPass: sPass,
       );
       _currentJoinLink = newJoinLink;
       _serverIndex = session.serverIndex!;
@@ -1786,10 +1845,22 @@ class _ParazitXLifecycleObserver extends WidgetsBindingObserver {
 /// `host` is always the loopback interface (the relay binds SOCKS5
 /// only on `127.0.0.1`). `port` mirrors the port the manager passed
 /// to `ParazitXVpnPlugin.start(socksPort: ...)`.
+///
+/// The relay's SOCKS5 listener requires RFC1929 username/password auth
+/// (the relay generates fresh credentials per session). [username] and
+/// [password] carry those credentials so the in-process Mihomo bridge
+/// proxy can authenticate on every dial. They are NEVER logged: see
+/// [toString], which redacts them to a `hasAuth` boolean.
+///
+/// When auth is unused (e.g. tests, future no-auth deployments) both
+/// fields default to empty strings and the patcher omits them from the
+/// generated bridge proxy.
 class ParazitXBridgeInfo {
   const ParazitXBridgeInfo({
     required this.host,
     required this.port,
+    this.username = '',
+    this.password = '',
   });
 
   /// Loopback host the SOCKS5 listener is bound to. Always
@@ -1799,18 +1870,31 @@ class ParazitXBridgeInfo {
   /// TCP port the SOCKS5 listener is bound to.
   final int port;
 
+  /// SOCKS5 RFC1929 username. Empty string disables auth on the
+  /// generated bridge proxy.
+  final String username;
+
+  /// SOCKS5 RFC1929 password. Empty string disables auth on the
+  /// generated bridge proxy.
+  final String password;
+
   @override
-  String toString() => 'ParazitXBridgeInfo(host=$host, port=$port)';
+  String toString() {
+    final hasAuth = username.isNotEmpty && password.isNotEmpty;
+    return 'ParazitXBridgeInfo(host=$host, port=$port, hasAuth=$hasAuth)';
+  }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is ParazitXBridgeInfo &&
           other.host == host &&
-          other.port == port);
+          other.port == port &&
+          other.username == username &&
+          other.password == password);
 
   @override
-  int get hashCode => Object.hash(host, port);
+  int get hashCode => Object.hash(host, port, username, password);
 }
 
 /// Internal description of a signaling-relay candidate the dialer can

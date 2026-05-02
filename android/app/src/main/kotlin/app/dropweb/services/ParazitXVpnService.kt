@@ -97,6 +97,11 @@ class ParazitXVpnService : VpnService() {
         const val MODE_STANDALONE_VPN = "standalone_vpn"
         const val MODE_MIHOMO_OUTBOUND = "mihomo_outbound"
 
+        // Override the relay's per-process SOCKS5 creds. Both must be
+        // non-empty to apply; otherwise relay generates its own randoms.
+        const val EXTRA_SOCKS_USER = "socks_user"
+        const val EXTRA_SOCKS_PASS = "socks_pass"
+
         /**
          * Clamp an incoming MTU to [MIN_MTU]..[MAX_MTU]; out-of-range
          * (including 0/negative) falls back to [DEFAULT_MTU]. Logs the
@@ -202,6 +207,8 @@ class ParazitXVpnService : VpnService() {
         val port = intent?.getIntExtra(EXTRA_SOCKS_PORT, 1080) ?: 1080
         val rawMtu = intent?.getIntExtra(EXTRA_MTU, DEFAULT_MTU) ?: DEFAULT_MTU
         val mtu = sanitizeMtu(rawMtu)
+        val socksUser = intent?.getStringExtra(EXTRA_SOCKS_USER)
+        val socksPass = intent?.getStringExtra(EXTRA_SOCKS_PASS)
         val rawMode = intent?.getStringExtra(EXTRA_MODE)
         val mode: String = when (rawMode) {
             MODE_STANDALONE_VPN -> MODE_STANDALONE_VPN
@@ -241,7 +248,7 @@ class ParazitXVpnService : VpnService() {
         if (isRunning) {
             // Already running — this is a rotation: re-AUTH with new joinLink.
             Log.i(TAG, "onStartCommand: already running, rotating joinLink")
-            ParazitXRelayController.start(this, port, joinLink)
+            ParazitXRelayController.start(this, port, joinLink, socksUser, socksPass)
             return START_STICKY
         }
 
@@ -257,7 +264,7 @@ class ParazitXVpnService : VpnService() {
             broadcastLog(line)
         }
 
-        val err = ParazitXRelayController.start(this, port, joinLink)
+        val err = ParazitXRelayController.start(this, port, joinLink, socksUser, socksPass)
         if (err != null) {
             Log.e(TAG, "relay start failed: $err")
             updateStatus("ERROR:$err")
@@ -617,6 +624,8 @@ object ParazitXVpnController {
         joinLink: String,
         mtu: Int = ParazitXVpnService.DEFAULT_MTU,
         mode: String = ParazitXVpnService.MODE_STANDALONE_VPN,
+        socksUser: String? = null,
+        socksPass: String? = null,
     ): Boolean {
         if (mode == ParazitXVpnService.MODE_STANDALONE_VPN &&
             VpnService.prepare(ctx) != null
@@ -629,6 +638,10 @@ object ParazitXVpnController {
             .putExtra(ParazitXVpnService.EXTRA_SOCKS_PORT, socksPort)
             .putExtra(ParazitXVpnService.EXTRA_MTU, mtu)
             .putExtra(ParazitXVpnService.EXTRA_MODE, mode)
+        if (!socksUser.isNullOrEmpty() && !socksPass.isNullOrEmpty()) {
+            intent.putExtra(ParazitXVpnService.EXTRA_SOCKS_USER, socksUser)
+            intent.putExtra(ParazitXVpnService.EXTRA_SOCKS_PASS, socksPass)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ctx.startForegroundService(intent)
         } else {

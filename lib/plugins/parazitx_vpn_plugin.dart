@@ -62,17 +62,29 @@ class ParazitXVpnPlugin {
   /// (driven by [kParazitXUseMihomoOutbound]). Unknown values fall back
   /// to standalone on the Kotlin side; passing an explicit value here
   /// avoids that fallback.
+  ///
+  /// `socksUser` / `socksPass` override the relay's per-process random
+  /// credentials. Required for the Mihomo-outbound mode so the Dart
+  /// side can publish the same credentials on `ParazitXBridgeInfo` and
+  /// Mihomo's bridge proxy can authenticate against the relay's SOCKS5
+  /// listener. When omitted, the relay generates random creds itself
+  /// (legacy standalone-VPN path uses tun2socks which reads them via
+  /// `ParazitXRelayController.getSocksCredentials()` in-process).
   static Future<void> start({
     required String joinLink,
     int socksPort = 1080,
     int mtu = defaultMtu,
     String? mode,
+    String? socksUser,
+    String? socksPass,
   }) async {
     await _channel.invokeMethod<void>('start', {
       'joinLink': joinLink,
       'socksPort': socksPort,
       'mtu': mtu,
       'mode': mode ?? defaultMode,
+      if (socksUser != null) 'socksUser': socksUser,
+      if (socksPass != null) 'socksPass': socksPass,
     });
   }
 

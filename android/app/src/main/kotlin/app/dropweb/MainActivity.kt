@@ -203,6 +203,8 @@ class MainActivity : FlutterActivity() {
                         // out-of-range, so we just forward whatever we got.
                         val mtu = (args["mtu"] as? Number)?.toInt()
                             ?: ParazitXVpnService.DEFAULT_MTU
+                        val socksUser = args["socksUser"] as? String
+                        val socksPass = args["socksPass"] as? String
                         // Mode selector. Validated against the public
                         // constants so a fat-fingered Dart caller can't
                         // sneak past the Kotlin-side `when` fallback.
@@ -239,6 +241,7 @@ class MainActivity : FlutterActivity() {
                         if (mode == ParazitXVpnService.MODE_MIHOMO_OUTBOUND) {
                             val started = ParazitXVpnController.start(
                                 applicationContext, port, joinLink, mtu, mode,
+                                socksUser, socksPass,
                             )
                             if (started) result.success(null)
                             else result.error(
@@ -260,6 +263,7 @@ class MainActivity : FlutterActivity() {
                         appPlugin.requestVpnPermission {
                             val started = ParazitXVpnController.start(
                                 applicationContext, port, joinLink, mtu, mode,
+                                socksUser, socksPass,
                             )
                             if (started) result.success(null)
                             else result.error(

@@ -13,9 +13,8 @@ import java.security.SecureRandom
 object ParazitXRelayController {
     private const val TAG = "ParazitXRelay"
 
-    // Randomized per-process to avoid cross-app SOCKS hijack.
-    private val socksUser: String = randomAlphaNum(16)
-    private val socksPass: String = randomAlphaNum(24)
+    private var socksUser: String = ""
+    private var socksPass: String = ""
 
     private var process: Process? = null
     private var thread: Thread? = null
@@ -36,7 +35,13 @@ object ParazitXRelayController {
     var logListener: ((String) -> Unit)? = null
 
     @Synchronized
-    fun start(ctx: Context, socksPort: Int, joinLink: String): String? {
+    fun start(
+        ctx: Context,
+        socksPort: Int,
+        joinLink: String,
+        socksUserOverride: String? = null,
+        socksPassOverride: String? = null,
+    ): String? {
         if (isRunning) {
             Log.i(TAG, "start: already running, resending AUTH")
             sendAuth(joinLink)
@@ -48,6 +53,17 @@ object ParazitXRelayController {
         } catch (e: Exception) {
             Log.e(TAG, "ensureBinary failed", e)
             return "ensureBinary: ${e.message}"
+        }
+
+        socksUser = if (!socksUserOverride.isNullOrEmpty()) {
+            socksUserOverride
+        } else {
+            randomAlphaNum(16)
+        }
+        socksPass = if (!socksPassOverride.isNullOrEmpty()) {
+            socksPassOverride
+        } else {
+            randomAlphaNum(24)
         }
 
         isRunning = true
@@ -74,7 +90,7 @@ object ParazitXRelayController {
                 }
                 Log.i(
                     TAG,
-                    "relay started: socks5://$socksUser:$socksPass@127.0.0.1:$socksPort"
+                    "relay started on 127.0.0.1:$socksPort"
                 )
 
                 // Send the initial join request.

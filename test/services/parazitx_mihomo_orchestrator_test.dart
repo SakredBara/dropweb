@@ -211,20 +211,86 @@ void main() {
       expect(result, isNotNull);
     });
 
+    test('forwards bridgeInfo username/password into bridge proxy', () {
+      final config = <String, dynamic>{'proxies': <dynamic>[]};
+      const info = ParazitXBridgeInfo(
+        host: '127.0.0.1',
+        port: 18080,
+        username: 'sock-user-123',
+        password: 'sock-pass-456',
+      );
+
+      ParazitXMihomoOrchestrator.applyToConfig(config, bridgeInfo: info);
+
+      final proxies = (config['proxies'] as List).cast<Map<String, dynamic>>();
+      final bridge = proxies.firstWhere(
+        (p) => p['name'] == kDropwebParazitXBridgeName,
+      );
+      expect(bridge['username'], 'sock-user-123');
+      expect(bridge['password'], 'sock-pass-456');
+    });
+
+    test('omits credentials when bridgeInfo username/password are empty', () {
+      final config = <String, dynamic>{'proxies': <dynamic>[]};
+      const info = ParazitXBridgeInfo(host: '127.0.0.1', port: 18080);
+
+      ParazitXMihomoOrchestrator.applyToConfig(config, bridgeInfo: info);
+
+      final proxies = (config['proxies'] as List).cast<Map<String, dynamic>>();
+      final bridge = proxies.firstWhere(
+        (p) => p['name'] == kDropwebParazitXBridgeName,
+      );
+      expect(bridge.containsKey('username'), false);
+      expect(bridge.containsKey('password'), false);
+    });
   });
 
   group('ParazitXBridgeInfo', () {
-    test('toString includes host and port', () {
+    test('default username/password are empty strings', () {
       const info = ParazitXBridgeInfo(host: '127.0.0.1', port: 1080);
+      expect(info.username, '');
+      expect(info.password, '');
+    });
+
+    test('toString redacts credentials, exposes only hasAuth flag', () {
+      const info = ParazitXBridgeInfo(
+        host: '127.0.0.1',
+        port: 1080,
+        username: 'secret-user',
+        password: 'secret-pass',
+      );
       final s = info.toString();
       expect(s, contains('host=127.0.0.1'));
       expect(s, contains('port=1080'));
+      expect(s, contains('hasAuth=true'));
+      expect(s.contains('secret-user'), false);
+      expect(s.contains('secret-pass'), false);
     });
 
-    test('equality and hashCode include host and port', () {
-      const a = ParazitXBridgeInfo(host: '127.0.0.1', port: 1080);
-      const b = ParazitXBridgeInfo(host: '127.0.0.1', port: 1080);
-      const c = ParazitXBridgeInfo(host: '127.0.0.1', port: 9999);
+    test('toString reports hasAuth=false when creds are empty', () {
+      const info = ParazitXBridgeInfo(host: '127.0.0.1', port: 1080);
+      expect(info.toString(), contains('hasAuth=false'));
+    });
+
+    test('equality and hashCode include username and password', () {
+      const a = ParazitXBridgeInfo(
+        host: '127.0.0.1',
+        port: 1080,
+        username: 'u',
+        password: 'p',
+      );
+      const b = ParazitXBridgeInfo(
+        host: '127.0.0.1',
+        port: 1080,
+        username: 'u',
+        password: 'p',
+      );
+      const c = ParazitXBridgeInfo(
+        host: '127.0.0.1',
+        port: 1080,
+        username: 'u',
+        password: 'different',
+      );
       expect(a, b);
       expect(a.hashCode, b.hashCode);
       expect(a == c, false);

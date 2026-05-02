@@ -156,6 +156,75 @@ void main() {
       expect(proxies.single['server'], '127.0.0.2');
     });
 
+    test('adds ParazitX SOCKS outbound with optional credentials', () {
+      final config = <String, dynamic>{'proxies': <dynamic>[]};
+      final result = MihomoDialerProxyPatcher.patch(
+        config,
+        bridgePort: 18080,
+        username: 'u',
+        password: 'p',
+      );
+      expect(result.bridgeAdded, true);
+      final proxies = (config['proxies'] as List).cast<Map<String, dynamic>>();
+      final bridge = proxies.firstWhere(
+        (p) => p['name'] == kDropwebParazitXBridgeName,
+      );
+      expect(bridge['type'], 'socks5');
+      expect(bridge['server'], '127.0.0.1');
+      expect(bridge['port'], 18080);
+      expect(bridge['username'], 'u');
+      expect(bridge['password'], 'p');
+    });
+
+    test('omits credentials when username/password are null or empty', () {
+      final config = <String, dynamic>{'proxies': <dynamic>[]};
+      MihomoDialerProxyPatcher.patch(config, bridgePort: 18080);
+      final proxies = (config['proxies'] as List).cast<Map<String, dynamic>>();
+      final bridge = proxies.firstWhere(
+        (p) => p['name'] == kDropwebParazitXBridgeName,
+      );
+      expect(bridge.containsKey('username'), false);
+      expect(bridge.containsKey('password'), false);
+
+      final config2 = <String, dynamic>{'proxies': <dynamic>[]};
+      MihomoDialerProxyPatcher.patch(
+        config2,
+        bridgePort: 18080,
+        username: '',
+        password: '',
+      );
+      final proxies2 =
+          (config2['proxies'] as List).cast<Map<String, dynamic>>();
+      final bridge2 = proxies2.firstWhere(
+        (p) => p['name'] == kDropwebParazitXBridgeName,
+      );
+      expect(bridge2.containsKey('username'), false);
+      expect(bridge2.containsKey('password'), false);
+    });
+
+    test('updates credentials in place on re-patch', () {
+      final config = <String, dynamic>{'proxies': <dynamic>[]};
+      MihomoDialerProxyPatcher.patch(
+        config,
+        bridgePort: 18080,
+        username: 'u1',
+        password: 'p1',
+      );
+      MihomoDialerProxyPatcher.patch(
+        config,
+        bridgePort: 18080,
+        username: 'u2',
+        password: 'p2',
+      );
+      final proxies = (config['proxies'] as List).cast<Map<String, dynamic>>();
+      final bridges = proxies
+          .where((p) => p['name'] == kDropwebParazitXBridgeName)
+          .toList();
+      expect(bridges, hasLength(1));
+      expect(bridges.single['username'], 'u2');
+      expect(bridges.single['password'], 'p2');
+    });
+
     test(
         'can append ParazitX bridge to select groups without changing selected value',
         () {
@@ -284,6 +353,23 @@ void main() {
         'PROXY-A',
         kDropwebParazitXBridgeName,
       ]);
+    });
+
+    test('removes stale credentials when re-patched without them', () {
+      final config = <String, dynamic>{'proxies': <dynamic>[]};
+      MihomoDialerProxyPatcher.patch(
+        config,
+        bridgePort: 18080,
+        username: 'u',
+        password: 'p',
+      );
+      MihomoDialerProxyPatcher.patch(config, bridgePort: 18080);
+      final proxies = (config['proxies'] as List).cast<Map<String, dynamic>>();
+      final bridge = proxies.firstWhere(
+        (p) => p['name'] == kDropwebParazitXBridgeName,
+      );
+      expect(bridge.containsKey('username'), false);
+      expect(bridge.containsKey('password'), false);
     });
 
     test('prepends directRules to the rules list', () {

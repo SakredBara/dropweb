@@ -148,6 +148,8 @@ class ParazitXMihomoOrchestrator {
       config,
       bridgePort: info.port,
       bridgeServer: info.host,
+      username: info.username.isEmpty ? null : info.username,
+      password: info.password.isEmpty ? null : info.password,
       addToGroups: const [_kDefaultBridgeGroup],
       directRules: directRules,
       rulesKey: rulesKey,
