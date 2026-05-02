@@ -144,11 +144,39 @@ class ParazitXManager {
       StreamController<String>.broadcast();
 
   static bool _tunnelReady = false;
+
   static bool get isTunnelReady => _tunnelReady;
   static Stream<bool> get tunnelReadyStream => _tunnelReadyCtrl.stream;
   static Stream<String> get captchaStream => _captchaCtrl.stream;
 
   static bool get isActive => _isActive;
+
+  /// Local SOCKS5 endpoint exposed by the ParazitX relay process.
+  ///
+  /// Populated when the relay reports tunnel-ready (the SOCKS listener
+  /// is bound on the loopback interface and a join_link is active so
+  /// outbound traffic actually has somewhere to go). Cleared when the
+  /// tunnel fails or the manager is deactivated.
+  ///
+  /// Consumed by future Mihomo-config patching tasks (Task 4/5 of the
+  /// 2026-05-02 plan): when the Kotlin-side `MODE_MIHOMO_OUTBOUND` is
+  /// selected, the patcher rewrites active Mihomo proxies to dial
+  /// through this loopback SOCKS5 endpoint, making ParazitX a SOCKS5
+  /// outbound that Mihomo's TUN/DNS/fake-IP layer routes into.
+  static ParazitXBridgeInfo? _bridgeInfo;
+  static final StreamController<ParazitXBridgeInfo?> _bridgeInfoCtrl =
+      StreamController<ParazitXBridgeInfo?>.broadcast();
+
+  /// Currently advertised SOCKS5 bridge endpoint, or `null` when the
+  /// relay is not active / tunnel not ready.
+  static ParazitXBridgeInfo? get bridgeInfo => _bridgeInfo;
+
+  /// Broadcast stream of bridge endpoint changes. Emits the current
+  /// [ParazitXBridgeInfo] when the relay becomes ready, and `null` when
+  /// it is torn down. Use this from the Mihomo-side patcher to mount
+  /// and unmount the SOCKS5 outbound at the right moments.
+  static Stream<ParazitXBridgeInfo?> get bridgeInfoStream =>
+      _bridgeInfoCtrl.stream;
 
   /// Resolve the ordered callfactory endpoint pool plus signaling-relay
   /// fallback list used by [_requestJoinLink].
@@ -311,15 +339,23 @@ class ParazitXManager {
           );
           continue;
         }
-        // Subscription-header relays predate the manifest's `kind`
-        // field and were always assumed to be passthrough relays
-        // (they need an X-Dropweb-Backend header). Keep that contract
-        // for headers; operators that want session-style relays must
-        // declare them in the manifest where `kind` is explicit.
+        // Subscription-header relays are treated as standalone
+        // `https-session` endpoints — the relay URL itself IS the
+        // session endpoint and selects a backend on its own. This
+        // restores pre-19104bf behavior where the YC API Gateway
+        // (`_ycProxyUrl`) was dialed via `_tryServer(..., isHttps: true)`
+        // with NO `X-Dropweb-Backend` header. The current Remnawave
+        // panel still publishes that YC URL in `dropweb-parazitx-relays`,
+        // so honoring it as a session endpoint preserves stable
+        // operator-side compatibility without compiling the URL into
+        // the client. Operators that want passthrough semantics (with
+        // backend forwarding) must declare relays in the manifest where
+        // `kind` is explicit — manifest relays still carry their own
+        // kind verbatim.
         out.add(_RelayCandidate(
           id: 'header-$i:${uri.host}',
           url: trimmed,
-          kind: kParazitXRelayKindHttpsPassthrough,
+          kind: kParazitXRelayKindHttpsSession,
         ));
         i++;
       }
@@ -969,6 +1005,21 @@ class ParazitXManager {
   /// Set to 60 seconds to allow for slow networks + server delays.
   static const _activationTimeout = Duration(seconds: 60);
 
+  /// Map a native mode constant to the canonical log label used by
+  /// the `[ParazitX][mode] <label>` line. Kept centralized so
+  /// activation, rotation and any future reconnect path emit the
+  /// same label without drift.
+  static String _modeLogLabel(String mode) {
+    switch (mode) {
+      case kParazitXModeMihomoOutbound:
+        return 'mihomo-outbound';
+      case kParazitXModeStandaloneVpn:
+        return 'standalone-vpn';
+      default:
+        return mode;
+    }
+  }
+
   /// Activate ParazitX mode:
   /// 1. Load stored VK cookies
   /// 2. Encrypt them with X25519+AES-GCM (forward secrecy)
@@ -1072,19 +1123,29 @@ class ParazitXManager {
     developer.log('[ParazitX][activation] relay status subscribed',
         name: 'ParazitX');
 
-    // Start VPN service
+    // Start VPN service. Mode is sourced from the [kParazitXUseMihomoOutbound]
+    // feature flag so rotation + reconnect paths below stay in lock-step
+    // with initial activation. Logged once per start so it's clear from
+    // logs which native lifecycle is in play.
+    final mode = ParazitXVpnPlugin.defaultMode;
     final pluginStopwatch = Stopwatch()..start();
     developer.log(
-        '[ParazitX][activation] plugin.start: BEFORE (socksPort=$_socksPort, mtu=$_tunMtu)',
+      '[ParazitX][mode] ${_modeLogLabel(mode)}',
+      name: 'ParazitX',
+    );
+    LogBuffer.instance.add('[ParazitX][mode] ${_modeLogLabel(mode)}');
+    developer.log(
+        '[ParazitX][activation] plugin.start: BEFORE (socksPort=$_socksPort, mtu=$_tunMtu, mode=$mode)',
         name: 'ParazitX');
-    LogBuffer.instance
-        .add('[ParazitX][activation] plugin.start: BEFORE (mtu=$_tunMtu)');
+    LogBuffer.instance.add(
+        '[ParazitX][activation] plugin.start: BEFORE (mtu=$_tunMtu, mode=$mode)');
 
     try {
       await ParazitXVpnPlugin.start(
         joinLink: joinLink,
         socksPort: _socksPort,
         mtu: _tunMtu,
+        mode: mode,
       );
     } on PlatformException catch (e) {
       final ms = pluginStopwatch.elapsedMilliseconds;
@@ -1131,6 +1192,23 @@ class ParazitXManager {
         if (!_tunnelReady) {
           _tunnelReady = true;
           _tunnelReadyCtrl.add(true);
+          // Tunnel just transitioned to ready: the relay's local SOCKS5
+          // listener is bound and a join_link is active, so the bridge
+          // is now consumable by Mihomo. Publish endpoint metadata.
+          final info = ParazitXBridgeInfo(
+            host: '127.0.0.1',
+            port: _socksPort,
+          );
+          _bridgeInfo = info;
+          _bridgeInfoCtrl.add(info);
+          developer.log(
+            '[ParazitX][mihomo] bridge ready host=${info.host} port=${info.port}',
+            name: 'ParazitX',
+          );
+          LogBuffer.instance.add(
+            '[ParazitX][mihomo] bridge ready host=${info.host} port=${info.port}',
+          );
+          _triggerMihomoConfigReload(reason: 'bridge ready');
         }
         // Reset backoff on successful tunnel connection
         if (_reconnectAttempt > 0) {
@@ -1154,6 +1232,20 @@ class ParazitXManager {
         if (_tunnelReady) {
           _tunnelReady = false;
           _tunnelReadyCtrl.add(false);
+        }
+        // Bridge is no longer routable: tear down so the Mihomo-side
+        // patcher can drop the dead SOCKS5 outbound from the active
+        // config and avoid blackholing traffic.
+        if (_bridgeInfo != null) {
+          _bridgeInfo = null;
+          _bridgeInfoCtrl.add(null);
+          developer.log(
+            '[ParazitX][mihomo] bridge cleared (tunnel failure)',
+            name: 'ParazitX',
+          );
+          LogBuffer.instance
+              .add('[ParazitX][mihomo] bridge cleared (tunnel failure)');
+          _triggerMihomoConfigReload(reason: 'bridge cleared (failure)');
         }
         unawaited(_reconnectAfterFailure());
       }
@@ -1474,6 +1566,57 @@ class ParazitXManager {
       _tunnelReady = false;
       _tunnelReadyCtrl.add(false);
     }
+    if (_bridgeInfo != null) {
+      _bridgeInfo = null;
+      _bridgeInfoCtrl.add(null);
+      developer.log(
+        '[ParazitX][mihomo] bridge cleared (deactivate)',
+        name: 'ParazitX',
+      );
+      LogBuffer.instance.add('[ParazitX][mihomo] bridge cleared (deactivate)');
+      _triggerMihomoConfigReload(reason: 'bridge cleared (deactivate)');
+    }
+  }
+
+  /// Drive a Mihomo config reload so the running clash core re-runs
+  /// `patchRawConfig` and picks up the latest `ParazitXMihomoOrchestrator`
+  /// state (bridge injected on ready, removed on cleared).
+  ///
+  /// Gated on [kParazitXUseMihomoOutbound]: in standalone mode the
+  /// bridge is irrelevant to Mihomo's running config, so skipping the
+  /// reload avoids unnecessary clash work and side effects (group
+  /// re-evaluation, provider refresh).
+  ///
+  /// Uses the debounced `setupClashConfigDebounce` (the same primitive
+  /// the rest of the app uses for "subscription/profile changed, push a
+  /// new config to clash"). Best-effort: if `globalState.appController`
+  /// hasn't been wired yet (early in app boot), the call is silently
+  /// skipped — the next normal config rebuild will pick up the bridge
+  /// state from the orchestrator.
+  static void _triggerMihomoConfigReload({required String reason}) {
+    if (!kParazitXUseMihomoOutbound) return;
+    if (!globalState.isInit) {
+      developer.log(
+        '[ParazitX][mihomo] reload skipped (appController not ready): $reason',
+        name: 'ParazitX',
+      );
+      return;
+    }
+    try {
+      globalState.appController.setupClashConfigDebounce();
+      developer.log(
+        '[ParazitX][mihomo] requested clash setup reload: $reason',
+        name: 'ParazitX',
+      );
+      LogBuffer.instance.add(
+        '[ParazitX][mihomo] requested clash setup reload: $reason',
+      );
+    } catch (e) {
+      developer.log(
+        '[ParazitX][mihomo] reload trigger failed ($reason): $e',
+        name: 'ParazitX',
+      );
+    }
   }
 
   /// Returns last known tunnel status from the live stream. The service
@@ -1525,11 +1668,13 @@ class ParazitXManager {
     final newJoinLink = session.joinLink!;
     developer.log('rotateCall: got new joinLink', name: 'ParazitX');
 
+    final mode = ParazitXVpnPlugin.defaultMode;
     try {
       await ParazitXVpnPlugin.start(
         joinLink: newJoinLink,
         socksPort: _socksPort,
         mtu: _tunMtu,
+        mode: mode,
       );
       _currentJoinLink = newJoinLink;
       _serverIndex = session.serverIndex!;
@@ -1631,6 +1776,41 @@ class _ParazitXLifecycleObserver extends WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     ParazitXManager._onAppLifecycleStateChanged(state);
   }
+}
+
+/// Description of the local SOCKS5 endpoint exposed by the ParazitX
+/// relay process. Published via [ParazitXManager.bridgeInfo] /
+/// [ParazitXManager.bridgeInfoStream] when the relay's tunnel becomes
+/// ready, and cleared on tunnel failure / manager deactivation.
+///
+/// `host` is always the loopback interface (the relay binds SOCKS5
+/// only on `127.0.0.1`). `port` mirrors the port the manager passed
+/// to `ParazitXVpnPlugin.start(socksPort: ...)`.
+class ParazitXBridgeInfo {
+  const ParazitXBridgeInfo({
+    required this.host,
+    required this.port,
+  });
+
+  /// Loopback host the SOCKS5 listener is bound to. Always
+  /// `127.0.0.1` in the current relay implementation.
+  final String host;
+
+  /// TCP port the SOCKS5 listener is bound to.
+  final int port;
+
+  @override
+  String toString() => 'ParazitXBridgeInfo(host=$host, port=$port)';
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ParazitXBridgeInfo &&
+          other.host == host &&
+          other.port == port);
+
+  @override
+  int get hashCode => Object.hash(host, port);
 }
 
 /// Internal description of a signaling-relay candidate the dialer can

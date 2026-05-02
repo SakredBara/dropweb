@@ -203,6 +203,25 @@ class MainActivity : FlutterActivity() {
                         // out-of-range, so we just forward whatever we got.
                         val mtu = (args["mtu"] as? Number)?.toInt()
                             ?: ParazitXVpnService.DEFAULT_MTU
+                        // Mode selector. Validated against the public
+                        // constants so a fat-fingered Dart caller can't
+                        // sneak past the Kotlin-side `when` fallback.
+                        // Unknown / missing → standalone (legacy path).
+                        val mode = when (val raw = args["mode"] as? String) {
+                            ParazitXVpnService.MODE_STANDALONE_VPN ->
+                                ParazitXVpnService.MODE_STANDALONE_VPN
+                            ParazitXVpnService.MODE_MIHOMO_OUTBOUND ->
+                                ParazitXVpnService.MODE_MIHOMO_OUTBOUND
+                            null -> ParazitXVpnService.MODE_STANDALONE_VPN
+                            else -> {
+                                android.util.Log.w(
+                                    "MainActivity",
+                                    "parazitx_vpn start: unknown mode=$raw, " +
+                                        "defaulting to standalone_vpn",
+                                )
+                                ParazitXVpnService.MODE_STANDALONE_VPN
+                            }
+                        }
                         if (joinLink.isEmpty()) {
                             result.error(
                                 "BAD_ARGS",
@@ -211,15 +230,36 @@ class MainActivity : FlutterActivity() {
                             )
                             return@setMethodCallHandler
                         }
-                        // Reuse AppPlugin's VPN consent flow — it registers its
-                        // activity-result listener through ActivityPluginBinding,
-                        // so the FlutterActivity keeps its EGL context across
-                        // the consent dialog round trip. Doing prepare+launch
-                        // directly from MainActivity.onActivityResult breaks
-                        // Impeller's EGL state on Pixel 10 (black screen).
+                        // Mihomo-outbound mode: ParazitX never builds its
+                        // own tun, so VpnService consent is unnecessary —
+                        // Mihomo's DropwebVpnService already holds the
+                        // user's consent. Skip AppPlugin.requestVpnPermission
+                        // (which would otherwise show a redundant consent
+                        // dialog every activation).
+                        if (mode == ParazitXVpnService.MODE_MIHOMO_OUTBOUND) {
+                            val started = ParazitXVpnController.start(
+                                applicationContext, port, joinLink, mtu, mode,
+                            )
+                            if (started) result.success(null)
+                            else result.error(
+                                "VPN_START_FAILED",
+                                "ParazitXVpnController.start returned false " +
+                                    "in mihomo_outbound mode",
+                                null,
+                            )
+                            return@setMethodCallHandler
+                        }
+                        // Standalone mode: reuse AppPlugin's VPN consent
+                        // flow — it registers its activity-result listener
+                        // through ActivityPluginBinding, so the
+                        // FlutterActivity keeps its EGL context across the
+                        // consent dialog round trip. Doing prepare+launch
+                        // directly from MainActivity.onActivityResult
+                        // breaks Impeller's EGL state on Pixel 10
+                        // (black screen).
                         appPlugin.requestVpnPermission {
                             val started = ParazitXVpnController.start(
-                                applicationContext, port, joinLink, mtu,
+                                applicationContext, port, joinLink, mtu, mode,
                             )
                             if (started) result.success(null)
                             else result.error(

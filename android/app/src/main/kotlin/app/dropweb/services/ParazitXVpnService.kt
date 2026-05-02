@@ -30,7 +30,27 @@ import java.net.InetAddress
  * Android's activity manager aggressively throttles main-process children,
  * which killed relay's watchdog and silently tore down VK calls.
  *
- * Ownership (critical):
+ * Two operating modes (selected via [EXTRA_MODE] in the start Intent):
+ *
+ *   * standalone-vpn mode ([MODE_STANDALONE_VPN], DEFAULT — backward compat):
+ *     legacy ParazitXVpnService owns VPN + tun2socks. After relay reports
+ *     [TUNNEL_CONNECTED], we call [VpnService.Builder.establish()] and
+ *     [Androidbind.startTun2Socks] so all device traffic transits VK via
+ *     librelay's local SOCKS5.
+ *
+ *   * mihomo-outbound mode ([MODE_MIHOMO_OUTBOUND]): ParazitX starts the
+ *     relay process only and exposes its local SOCKS5 listener. Mihomo
+ *     (DropwebVpnService) owns the VPN/TUN/DNS pipeline and routes
+ *     traffic into the ParazitX SOCKS as a regular outbound. We do NOT
+ *     call [VpnService.Builder] / [establish] / [startTun2Socks] in this
+ *     mode — the relay must remain alive and continue broadcasting
+ *     status, but no second TUN is opened.
+ *
+ * Unknown / missing [EXTRA_MODE] falls back to [MODE_STANDALONE_VPN]
+ * unchanged — preserves the legacy contract so any existing caller that
+ * does not yet supply a mode keeps the proven behavior.
+ *
+ * Ownership (standalone-vpn mode):
  *   1. [ParazitXRelayController.start] is invoked from THIS service, so the
  *      spawned relay inherits the `:parazitx` cgroup and stays alive while
  *      the FGS is alive.
@@ -38,9 +58,13 @@ import java.net.InetAddress
  *   3. Statuses are broadcast via [BROADCAST_STATUS] to the main process so
  *      MainActivity can pipe them to the Flutter EventChannel.
  *
- * tun config: 0.0.0.0/0 route, excludes our own package so relay's signaling
- * WebSocket reaches VK SFU through the underlying network (not through tun
- * -> self loop, which resets within seconds).
+ * In mihomo-outbound mode only step 1 (relay spawn) and step 3 (status
+ * broadcast) occur; step 2 is gated off by [currentMode].
+ *
+ * tun config (standalone-vpn only): 0.0.0.0/0 route, excludes our own
+ * package so relay's signaling WebSocket reaches VK SFU through the
+ * underlying network (not through tun -> self loop, which resets within
+ * seconds).
  */
 class ParazitXVpnService : VpnService() {
 
@@ -68,6 +92,10 @@ class ParazitXVpnService : VpnService() {
         const val EXTRA_MTU = "mtu"
         const val ACTION_STOP = "app.dropweb.parazitx.STOP"
         const val ACTION_QUERY_STATUS = "app.dropweb.parazitx.QUERY_STATUS"
+
+        const val EXTRA_MODE = "mode"
+        const val MODE_STANDALONE_VPN = "standalone_vpn"
+        const val MODE_MIHOMO_OUTBOUND = "mihomo_outbound"
 
         /**
          * Clamp an incoming MTU to [MIN_MTU]..[MAX_MTU]; out-of-range
@@ -116,6 +144,7 @@ class ParazitXVpnService : VpnService() {
     @Volatile private var currentMtu: Int = DEFAULT_MTU
     @Volatile private var currentStatus: String = "disconnected"
     @Volatile private var currentJoinLink: String = ""
+    @Volatile private var currentMode: String = MODE_STANDALONE_VPN
 
     private var queryReceiver: BroadcastReceiver? = null
     private var captchaReceiver: BroadcastReceiver? = null
@@ -173,6 +202,16 @@ class ParazitXVpnService : VpnService() {
         val port = intent?.getIntExtra(EXTRA_SOCKS_PORT, 1080) ?: 1080
         val rawMtu = intent?.getIntExtra(EXTRA_MTU, DEFAULT_MTU) ?: DEFAULT_MTU
         val mtu = sanitizeMtu(rawMtu)
+        val rawMode = intent?.getStringExtra(EXTRA_MODE)
+        val mode: String = when (rawMode) {
+            MODE_STANDALONE_VPN -> MODE_STANDALONE_VPN
+            MODE_MIHOMO_OUTBOUND -> MODE_MIHOMO_OUTBOUND
+            null -> MODE_STANDALONE_VPN
+            else -> {
+                Log.w(TAG, "onStartCommand: unknown mode=$rawMode, defaulting to $MODE_STANDALONE_VPN")
+                MODE_STANDALONE_VPN
+            }
+        }
 
         if (joinLink.isEmpty()) {
             Log.e(TAG, "onStartCommand: missing joinLink")
@@ -183,8 +222,9 @@ class ParazitXVpnService : VpnService() {
         currentSocksPort = port
         currentMtu = mtu
         currentJoinLink = joinLink
+        currentMode = mode
 
-        Log.i(TAG, "onStartCommand: socksPort=$port mtu=$mtu (raw=$rawMtu)")
+        Log.i(TAG, "onStartCommand: mode=$mode socksPort=$port mtu=$mtu (raw=$rawMtu)")
 
         // Foreground notification MUST be posted before any long work,
         // otherwise startForegroundService → no startForeground within 5s
@@ -231,14 +271,21 @@ class ParazitXVpnService : VpnService() {
     private fun onRelayStatus(status: String) {
         updateStatus(status)
 
-        // Bring up tun2socks once relay signals the VK tunnel is ready.
         if ((status == "TUNNEL_CONNECTED" || status == "TUNNEL_ACTIVE") &&
             !tun2socksStarted
         ) {
-            val started = establishTunAndStartTun2Socks(currentSocksPort, currentMtu)
-            if (!started) {
-                updateStatus("ERROR:establish failed")
-                stopSelfClean()
+            if (currentMode == MODE_MIHOMO_OUTBOUND) {
+                Log.i(
+                    TAG,
+                    "relay $status in $MODE_MIHOMO_OUTBOUND mode: skipping " +
+                        "VpnService.Builder/establish + tun2socks; Mihomo owns TUN/DNS",
+                )
+            } else {
+                val started = establishTunAndStartTun2Socks(currentSocksPort, currentMtu)
+                if (!started) {
+                    updateStatus("ERROR:establish failed")
+                    stopSelfClean()
+                }
             }
         }
 
@@ -565,8 +612,11 @@ object ParazitXVpnController {
         socksPort: Int,
         joinLink: String,
         mtu: Int = ParazitXVpnService.DEFAULT_MTU,
+        mode: String = ParazitXVpnService.MODE_STANDALONE_VPN,
     ): Boolean {
-        if (VpnService.prepare(ctx) != null) {
+        if (mode == ParazitXVpnService.MODE_STANDALONE_VPN &&
+            VpnService.prepare(ctx) != null
+        ) {
             Log.w(TAG, "VPN not prepared — caller must show consent dialog")
             return false
         }
@@ -574,6 +624,7 @@ object ParazitXVpnController {
             .putExtra(ParazitXVpnService.EXTRA_JOIN_LINK, joinLink)
             .putExtra(ParazitXVpnService.EXTRA_SOCKS_PORT, socksPort)
             .putExtra(ParazitXVpnService.EXTRA_MTU, mtu)
+            .putExtra(ParazitXVpnService.EXTRA_MODE, mode)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ctx.startForegroundService(intent)
         } else {
