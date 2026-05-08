@@ -10,6 +10,7 @@ import 'package:dropweb/models/common.dart';
 import 'package:dropweb/plugins/app.dart';
 import 'package:dropweb/plugins/tile.dart';
 import 'package:dropweb/plugins/vpn.dart';
+import 'package:dropweb/services/deep_link_handler.dart';
 import 'package:dropweb/state.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -54,6 +55,10 @@ Future<void> main() async {
     child: Application(),
   ));
   debugPrint("[dropweb] [MAIN] runApp returned");
+
+  if (Platform.isAndroid) {
+    unawaited(DeepLinkHandler.init());
+  }
 }
 
 @pragma('vm:entry-point')
@@ -232,7 +237,7 @@ Future<void> _service(List<String> flags) async {
       };
 
       // Get server group name from header (may be base64-encoded)
-      String? groupName = profile?.providerHeaders['flclashx-serverinfo'];
+      String? groupName = profile?.providerHeaders['dropweb-serverinfo'];
       if (groupName != null && groupName.isNotEmpty) {
         try {
           final normalized = base64.normalize(groupName);

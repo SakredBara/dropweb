@@ -112,7 +112,42 @@ class _SubscriptionPageState extends ConsumerState<SubscriptionPage>
 
 // ── Profiles content ──────────────────────────────────────────────────────
 
-Future<void> _refreshProfiles(BuildContext context) async {
+/// Refresh handler for the Profiles list pull-to-refresh.
+///
+/// If [current] is non-null, refreshes ONLY that profile — this is what
+/// the user expects when they pull-to-refresh while viewing the active
+/// subscription. Falls back to refreshing every profile when no current
+/// profile is selected (first-time setup, profile just deleted, etc.).
+///
+/// IMPORTANT: do NOT branch on `Profile.type`. After the URL-encryption
+/// migration, `profile.url` is stripped to `''` in memory and the real
+/// URL lives in the encrypted store; `Profile.update()` resolves it
+/// lazily. The `type` getter therefore reports `ProfileType.file` for
+/// every URL subscription post-migration, and an `if file → return`
+/// guard would silently no-op every refresh on real users (the bug we
+/// just fixed). If a profile genuinely has no URL anywhere, [update]
+/// throws and we surface the failure through the same path as any other
+/// error.
+Future<void> _refreshProfiles(BuildContext context, [Profile? current]) async {
+  final controller = globalState.appController;
+  if (current != null) {
+    controller.setProfile(current.copyWith(isUpdating: true));
+    try {
+      await controller.updateProfile(current);
+    } catch (e) {
+      controller.setProfile(current.copyWith(isUpdating: false));
+      if (context.mounted) {
+        globalState.showMessage(
+          title: appLocalizations.tip,
+          message: TextSpan(
+            text: "${current.label ?? current.id}: $e",
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        );
+      }
+    }
+    return;
+  }
   final profiles = globalState.config.profiles;
   final messages = <String>[];
   // ROBUSTNESS: `eagerError: false` — if one profile's update throws, the
@@ -121,14 +156,12 @@ Future<void> _refreshProfiles(BuildContext context) async {
   // subscription could leave the rest stuck in `isUpdating=true`.
   await Future.wait(
     profiles.map((profile) async {
-      if (profile.type == ProfileType.file) return;
-      globalState.appController.setProfile(profile.copyWith(isUpdating: true));
+      controller.setProfile(profile.copyWith(isUpdating: true));
       try {
-        await globalState.appController.updateProfile(profile);
+        await controller.updateProfile(profile);
       } catch (e) {
         messages.add("${profile.label ?? profile.id}: $e \n");
-        globalState.appController
-            .setProfile(profile.copyWith(isUpdating: false));
+        controller.setProfile(profile.copyWith(isUpdating: false));
       }
     }),
     eagerError: false,
@@ -163,6 +196,7 @@ class _ProfilesContentState extends ConsumerState<_ProfilesContent>
   Widget build(BuildContext context) {
     super.build(context); // Required for AutomaticKeepAliveClientMixin
     final state = ref.watch(profilesSelectorStateProvider);
+    final current = ref.watch(currentProfileProvider);
     final colorScheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -175,7 +209,7 @@ class _ProfilesContentState extends ConsumerState<_ProfilesContent>
       );
     }
     return RefreshIndicator(
-      onRefresh: () => _refreshProfiles(context),
+      onRefresh: () => _refreshProfiles(context, current),
       color: colorScheme.primary,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -804,6 +838,7 @@ class SharedProfilesBody extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(profilesSelectorStateProvider);
+    final current = ref.watch(currentProfileProvider);
     final colorScheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -817,7 +852,7 @@ class SharedProfilesBody extends ConsumerWidget {
       );
     }
     return RefreshIndicator(
-      onRefresh: () => _refreshProfiles(context),
+      onRefresh: () => _refreshProfiles(context, current),
       color: colorScheme.primary,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
