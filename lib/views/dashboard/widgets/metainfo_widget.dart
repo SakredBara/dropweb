@@ -270,7 +270,7 @@ class _MetainfoWidgetState extends ConsumerState<MetainfoWidget> {
                             icon: HugeIcon(
                               icon: supportUrl.toLowerCase().contains('t.me')
                                   ? HugeIcons.strokeRoundedTelegram
-                                  : HugeIcons.strokeRoundedLinkSquare01,
+                                  : HugeIcons.strokeRoundedCustomerSupport,
                               size: 34,
                               color: theme.colorScheme.primary,
                             ),
