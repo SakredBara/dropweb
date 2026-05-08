@@ -74,7 +74,7 @@ const _credits = <Contributor>[
   Contributor(
     name: 'kinvsh',
     avatar: 'assets/images/avatars/enkinvsh.jpg',
-    role: 'Pingu VPN',
+    role: 'dropweb',
     link: 'https://github.com/enkinvsh',
   ),
 ];
@@ -172,7 +172,7 @@ class AboutView extends StatelessWidget {
 
 // -----------------------------------------------------------------------
 // App header: tap anywhere on the logo + name block to flip 3D and swap
-// between Pingu VPN icon / name and the author's avatar / handle "kinvsh".
+// between dropweb icon / name and the author's avatar / handle "kinvsh".
 // -----------------------------------------------------------------------
 
 class _AppHeader extends StatefulWidget {
@@ -223,7 +223,7 @@ class _AppHeaderState extends State<_AppHeader>
       );
 
   // Open the back-face secondary link: project landing page.
-  void _openBackSecondary() => globalState.openUrl('https://pingu-vpn.org');
+  void _openBackSecondary() => globalState.openUrl('https://dropweb.org');
 
   @override
   Widget build(BuildContext context) {
@@ -275,7 +275,7 @@ class _AppHeaderState extends State<_AppHeader>
               behavior: HitTestBehavior.opaque,
               onTap: showFront ? _openFrontPrimary : _openBackSecondary,
               child: Text(
-                showFront ? globalState.packageInfo.version : 'Pingu VPN',
+                showFront ? globalState.packageInfo.version : 'dropweb',
                 style: textTheme.labelLarge?.copyWith(
                   decoration: showFront ? null : TextDecoration.underline,
                 ),
@@ -356,7 +356,7 @@ void _showCreditsSheet(BuildContext context) {
             spacing: 16,
             runSpacing: 16,
             children: [
-              // kinvsh is the flip-side of the Pingu VPN logo, not a credit entry.
+              // kinvsh is the flip-side of the dropweb logo, not a credit entry.
               for (final c in _credits.where((c) => c.name != 'kinvsh'))
                 SizedBox(
                   width: 80,
