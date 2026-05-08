@@ -8,7 +8,7 @@ import 'package:dropweb/enum/enum.dart';
 import 'package:dropweb/models/models.dart';
 import 'package:flutter/material.dart';
 
-const appName = "Pingu VPN";
+const appName = "dropweb";
 const appHelperService = "DropwebHelperService";
 const coreName = "clashx.meta";
 const browserUa =
@@ -85,7 +85,7 @@ const viewModeColumnsMap = {
 // const toolsStoreKey = PageStorageKey<String>('tools');
 // const profilesStoreKey = PageStorageKey<String>('profiles');
 
-const defaultPrimaryColor = 0xFF308AFF;
+const defaultPrimaryColor = 0xFF15803D;
 
 double getWidgetHeight(num lines) => max(lines * 84 + (lines - 1) * 16, 0).ap;
 
@@ -95,7 +95,15 @@ const mainIsolate = "dropwebMainIsolate";
 
 const serviceIsolate = "dropwebServiceIsolate";
 
-const defaultPrimaryColors = [defaultPrimaryColor];
+const defaultPrimaryColors = [
+  0xFF795548,
+  defaultPrimaryColor,
+  0xFFFFFF00,
+  0XFFBBC9CC,
+  0XFFABD397,
+  0XFFD8C0C3,
+  0XFF665390,
+];
 
 const scriptTemplate = """
 const main = (config) => {

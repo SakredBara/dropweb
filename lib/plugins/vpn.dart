@@ -52,7 +52,7 @@ class Vpn {
   String _cachedServerName = "";
 
   /// Cached profile info for foreground notification
-  String _cachedProfileName = "Pingu VPN";
+  String _cachedProfileName = "dropweb";
   String _cachedServiceName = "";
 
   /// Cached routing mode for foreground notification (updated via updateMode)
@@ -139,7 +139,7 @@ class Vpn {
       });
     } catch (e) {
       return json.encode({
-        "title": "Pingu VPN",
+        "title": "dropweb",
         "server": "",
         "content": "",
       });

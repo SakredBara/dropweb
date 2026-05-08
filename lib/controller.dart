@@ -328,8 +328,84 @@ class AppController {
   }
 
   void _applyThemeColor(Map<String, String> headers) {
-    // Theme color customization is intentionally disabled.
-    // The app now uses a fixed Pingu VPN palette based on the main color.
+    try {
+      final hexHeader = headers['flclashx-hex'];
+      if (hexHeader != null && hexHeader.isNotEmpty) {
+        _applyThemeColorFromHex(hexHeader);
+      }
+    } catch (e) {
+      commonPrint.log("Failed to apply theme color: $e");
+    }
+  }
+
+  void _applyThemeColorFromHex(String hexHeader) {
+    try {
+      final parts = hexHeader.split(':');
+      final hexString = parts[0].trim().replaceAll('#', '');
+      final variantName = parts.length > 1 ? parts[1].trim() : null;
+
+      // Check for pureblack flag in any position after color
+      bool enablePureBlack = false;
+      for (int i = 1; i < parts.length; i++) {
+        final part = parts[i].trim().toLowerCase();
+        if (part == 'pureblack') {
+          enablePureBlack = true;
+          break;
+        }
+      }
+
+      if (hexString.length != 6 && hexString.length != 8) {
+        commonPrint.log('Invalid hex color length: $hexString');
+        return;
+      }
+
+      final colorValue = int.parse(
+        hexString.length == 6 ? 'FF$hexString' : hexString,
+        radix: 16,
+      );
+
+      commonPrint
+          .log('Applying theme from flclashx-hex: #${hexString.toUpperCase()}'
+              '${variantName != null ? ', variant=$variantName' : ''}'
+              '${enablePureBlack ? ', pureBlack=true' : ''}');
+
+      _ref.read(themeSettingProvider.notifier).updateState((state) {
+        final updatedColors = [...state.primaryColors];
+        if (!updatedColors.contains(colorValue)) {
+          updatedColors.add(colorValue);
+        }
+
+        DynamicSchemeVariant? newVariant;
+        if (variantName != null && variantName.toLowerCase() != 'pureblack') {
+          try {
+            newVariant = DynamicSchemeVariant.values.firstWhere(
+              (v) => v.name.toLowerCase() == variantName.toLowerCase(),
+            );
+            commonPrint.log('Using scheme variant: ${newVariant.name}');
+          } catch (e) {
+            commonPrint.log(
+                'Unknown variant: $variantName, using current: ${state.schemeVariant.name}');
+          }
+        }
+
+        commonPrint.log(
+            'Theme updated: primaryColor=#${colorValue.toRadixString(16).toUpperCase()}'
+            '${enablePureBlack ? ', pureBlack=true' : ''}');
+
+        return state.copyWith(
+          primaryColor: colorValue,
+          primaryColors: updatedColors,
+          schemeVariant: newVariant ?? state.schemeVariant,
+          pureBlack: enablePureBlack,
+        );
+      });
+
+      savePreferencesDebounce();
+
+      commonPrint.log('Theme applied successfully');
+    } catch (e) {
+      commonPrint.log('Failed to parse hex color from header: $hexHeader - $e');
+    }
   }
 
   Future<void> updateProfile(Profile profile) async {
@@ -1311,34 +1387,6 @@ class AppController {
       commonPrint.log('Add Profile Failed: $err');
       final message = ErrorMapper.mapError(err.toString()) ?? err.toString();
       unawaited(globalState.showMessage(message: TextSpan(text: message)));
-    }
-  }
-
-  Future<void> addProfilesFromUrls(List<String> urls) async {
-    final normalized = <String>{};
-    for (final item in urls) {
-      final trimmed = item.trim();
-      if (trimmed.isEmpty) continue;
-      final uri = Uri.tryParse(trimmed);
-      if (uri == null ||
-          !uri.hasScheme ||
-          !(uri.scheme == 'http' || uri.scheme == 'https') ||
-          uri.host.isEmpty) {
-        continue;
-      }
-      normalized.add(uri.toString());
-    }
-    if (normalized.isEmpty) {
-      unawaited(
-        globalState.showMessage(
-          message: TextSpan(text: appLocalizations.invalidProfileUrl),
-        ),
-      );
-      return;
-    }
-
-    for (final url in normalized) {
-      await addProfileFormURL(url);
     }
   }
 

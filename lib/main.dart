@@ -280,7 +280,7 @@ Future<void> _service(List<String> flags) async {
         "content": content,
       });
     } catch (_) {
-      return json.encode({"title": "Pingu VPN", "server": "", "content": ""});
+      return json.encode({"title": "dropweb", "server": "", "content": ""});
     }
   };
 

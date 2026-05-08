@@ -197,23 +197,13 @@ class ThemeProps with _$ThemeProps {
       _$ThemePropsFromJson(json);
 
   factory ThemeProps.safeFromJson(Map<String, Object?>? json) {
-    const fixedTheme = ThemeProps(
-      primaryColor: defaultPrimaryColor,
-      primaryColors: defaultPrimaryColors,
-      schemeVariant: DynamicSchemeVariant.tonalSpot,
-    );
     if (json == null) {
-      return fixedTheme;
+      return defaultThemeProps;
     }
     try {
-      final parsed = ThemeProps.fromJson(json);
-      return parsed.copyWith(
-        primaryColor: defaultPrimaryColor,
-        primaryColors: defaultPrimaryColors,
-        schemeVariant: DynamicSchemeVariant.tonalSpot,
-      );
+      return ThemeProps.fromJson(json);
     } catch (_) {
-      return fixedTheme;
+      return defaultThemeProps;
     }
   }
 }
